@@ -40,6 +40,12 @@ const QuoteForm = {
       this.setPricingMode(e.target.value);
     });
 
+    document.getElementById('form-single-total').addEventListener('input', (e) => {
+      const v = parseFloat(e.target.value);
+      this.currentTab().single_total = Number.isFinite(v) ? Math.max(v, 0) : 0;
+      this.recalcTotals();
+    });
+
     const tabBar = document.getElementById('quote-tabs');
     tabBar.addEventListener('click', (e) => {
       const pill = e.target.closest('.tab-pill');
@@ -95,7 +101,8 @@ const QuoteForm = {
       tax_rate: 22,
       discount: 0,
       validity_days: null,
-      notes: ''
+      notes: '',
+      single_total: 0
     };
   },
 
@@ -125,6 +132,7 @@ const QuoteForm = {
     document.getElementById('form-discount').value = tab.discount ?? 0;
     document.getElementById('form-validity').value = tab.validity_days == null ? '' : tab.validity_days;
     document.getElementById('form-notes').value = tab.notes || '';
+    document.getElementById('form-single-total').value = tab.single_total ?? 0;
 
     this.applyPricingModeUI();
     this.renderTabs();
@@ -135,29 +143,30 @@ const QuoteForm = {
 
   setPricingMode(mode) {
     const tab = this.currentTab();
-    const next = mode === 'total' ? 'total' : 'unit';
+    const next = mode === 'single' ? 'single' : 'unit';
     const prev = (tab.pricing_mode || 'unit');
     if (prev === next) return;
 
     // Convert items in-place
-    if (next === 'total') {
-      tab.items.forEach((it, i) => {
-        // Ensure line_total is up-to-date before switching
-        const oldMode = tab.pricing_mode;
-        tab.pricing_mode = prev;
-        this.calcLineTotal(i, tab);
-        tab.pricing_mode = oldMode;
-        it.quantity = it.quantity || 1;
+    if (next === 'single') {
+      // Carry over current computed total as default single_total
+      this.recalcTotals();
+      tab.single_total = tab.total || tab.subtotal || 0;
+      tab.items.forEach((it) => {
+        it.quantity = 1;
         it.unit_price = 0;
         it.discount = 0;
-        it.line_total = parseFloat(it.line_total) || 0;
+        it.line_total = 0;
       });
+      tab.tax_rate = 0;
+      tab.discount = 0;
     } else {
       tab.items.forEach((it) => {
         it.quantity = it.quantity || 1;
         it.unit_price = it.unit_price || 0;
         it.discount = it.discount || 0;
       });
+      if (!Number.isFinite(parseFloat(tab.tax_rate))) tab.tax_rate = 22;
     }
 
     tab.pricing_mode = next;
@@ -171,8 +180,17 @@ const QuoteForm = {
   applyPricingModeUI() {
     const wrap = document.querySelector('.items-table-wrap');
     const tab = this.currentTab();
-    const isTotal = (tab.pricing_mode || 'unit') === 'total';
-    if (wrap) wrap.classList.toggle('pricing-total', isTotal);
+    const isSingle = (tab.pricing_mode || 'unit') === 'single';
+    if (wrap) wrap.classList.toggle('pricing-single', isSingle);
+
+    // Toggle single-total input + disable tax/discount in single mode
+    const singleWrap = document.getElementById('single-total-wrap');
+    if (singleWrap) singleWrap.style.display = isSingle ? '' : 'none';
+
+    const taxEl = document.getElementById('form-tax-rate');
+    const discEl = document.getElementById('form-discount');
+    if (taxEl) taxEl.disabled = isSingle;
+    if (discEl) discEl.disabled = isSingle;
   },
 
   addItem() {
@@ -214,10 +232,9 @@ const QuoteForm = {
     const h = document.getElementById('items-table-header');
     if (!h) return;
     const mode = this.currentTab().pricing_mode || 'unit';
-    if (mode === 'total') {
+    if (mode === 'single') {
       h.innerHTML = `
         <span>Descrizione</span>
-        <span style="text-align:right">Totale</span>
         <span></span>
       `;
       return;
@@ -241,10 +258,9 @@ const QuoteForm = {
     tab.items.forEach((item, i) => {
       const row = document.createElement('div');
       row.className = 'item-row';
-      if (mode === 'total') {
+      if (mode === 'single') {
         row.innerHTML = `
           <input type="text" placeholder="Descrizione prodotto/servizio" value="${this._esc(item.description)}" data-field="description" data-idx="${i}">
-          <input type="number" placeholder="0.00" min="0" step="0.01" value="${item.line_total ?? 0}" data-field="line_total" data-idx="${i}" style="text-align:right">
           <button type="button" class="btn-remove-item" data-idx="${i}" title="Rimuovi riga">×</button>
         `;
       } else {
@@ -276,7 +292,7 @@ const QuoteForm = {
         if (ltEl) ltEl.textContent = `€ ${this._fmt(tab.items[idx].line_total)}`;
       });
       input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && (input.dataset.field === 'unit_price' || input.dataset.field === 'line_total')) {
+        if (e.key === 'Enter' && (input.dataset.field === 'unit_price')) {
           e.preventDefault();
           this.addItem();
         }
@@ -292,8 +308,8 @@ const QuoteForm = {
     const mode = t.pricing_mode || 'unit';
     const item = t.items[idx];
     if (!item) return;
-    if (mode === 'total') {
-      item.line_total = parseFloat(item.line_total) || 0;
+    if (mode === 'single') {
+      item.line_total = 0;
       return;
     }
     const gross = (parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0);
@@ -304,12 +320,26 @@ const QuoteForm = {
     const tab = this.currentTab();
     tab.items.forEach((_, i) => this.calcLineTotal(i, tab));
 
-    const subtotal = tab.items.reduce((s, it) => s + (parseFloat(it.line_total) || 0), 0);
-    const taxRate = parseFloat(tab.tax_rate) || 0;
-    const discount = parseFloat(tab.discount) || 0;
-    const taxable = subtotal - discount;
-    const taxAmount = taxable * (taxRate / 100);
-    const total = taxable + taxAmount;
+    const mode = tab.pricing_mode || 'unit';
+    let subtotal, taxRate, discount, taxAmount, total;
+
+    if (mode === 'single') {
+      subtotal = parseFloat(tab.single_total) || 0;
+      taxRate = 0;
+      discount = 0;
+      taxAmount = 0;
+      total = subtotal;
+      // Keep form controls aligned
+      tab.tax_rate = 0;
+      tab.discount = 0;
+    } else {
+      subtotal = tab.items.reduce((s, it) => s + (parseFloat(it.line_total) || 0), 0);
+      taxRate = parseFloat(tab.tax_rate) || 0;
+      discount = parseFloat(tab.discount) || 0;
+      const taxable = subtotal - discount;
+      taxAmount = taxable * (taxRate / 100);
+      total = taxable + taxAmount;
+    }
 
     tab.subtotal = subtotal;
     tab.tax_amount = taxAmount;
@@ -326,13 +356,23 @@ const QuoteForm = {
     this.tabs.forEach((t) => {
       t.items = Array.isArray(t.items) ? t.items : [];
       t.items.forEach((_, i) => this.calcLineTotal(i, t));
-      const sub = t.items.reduce((s, it) => s + (parseFloat(it.line_total) || 0), 0);
-      const disc = parseFloat(t.discount) || 0;
-      const rate = parseFloat(t.tax_rate) || 0;
-      const taxable = sub - disc;
-      t.subtotal = sub;
-      t.tax_amount = taxable * (rate / 100);
-      t.total = taxable + t.tax_amount;
+      const mode = t.pricing_mode || 'unit';
+      if (mode === 'single') {
+        const single = parseFloat(t.single_total) || 0;
+        t.subtotal = single;
+        t.discount = 0;
+        t.tax_rate = 0;
+        t.tax_amount = 0;
+        t.total = single;
+      } else {
+        const sub = t.items.reduce((s, it) => s + (parseFloat(it.line_total) || 0), 0);
+        const disc = parseFloat(t.discount) || 0;
+        const rate = parseFloat(t.tax_rate) || 0;
+        const taxable = sub - disc;
+        t.subtotal = sub;
+        t.tax_amount = taxable * (rate / 100);
+        t.total = taxable + t.tax_amount;
+      }
     });
 
     const overallSubtotal = this.tabs.reduce((s, t) => s + (parseFloat(t.subtotal) || 0), 0);
@@ -408,6 +448,7 @@ const QuoteForm = {
         discount: (t?.discount ?? quote?.discount ?? 0),
         validity_days: (t?.validity_days ?? quote?.validity_days ?? null),
         notes: (t?.notes ?? quote?.notes ?? ''),
+        single_total: (t?.single_total ?? t?.subtotal ?? t?.total ?? 0),
         subtotal: t?.subtotal,
         tax_amount: t?.tax_amount,
         total: t?.total
@@ -423,6 +464,7 @@ const QuoteForm = {
       discount: quote?.discount ?? 0,
       validity_days: quote?.validity_days ?? null,
       notes: quote?.notes || '',
+      single_total: quote?.total ?? 0,
       subtotal: quote?.subtotal,
       tax_amount: quote?.tax_amount,
       total: quote?.total

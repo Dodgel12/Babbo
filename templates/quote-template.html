@@ -138,7 +138,10 @@
               <th class="num" style="width:10%">Sconto%</th>
               <th class="num" style="width:10%">Totale</th>
             {{else}}
-              <th class="num" style="width:45%">Totale</th>
+              {{!-- Legacy mode: pricing_mode = total (totale per riga). Single mode hides per-row totals. --}}
+              {{#if (eq this.pricing_mode 'total')}}
+                <th class="num" style="width:45%">Totale</th>
+              {{/if}}
             {{/if}}
           </tr>
         </thead>
@@ -155,7 +158,9 @@
               <td class="num">{{#if this.discount}}{{this.discount}}%{{else}}—{{/if}}</td>
               <td class="num">€ {{formatCurrency this.line_total}}</td>
             {{else}}
-              <td class="num">€ {{formatCurrency this.line_total}}</td>
+              {{#if (eq ../pricing_mode 'total')}}
+                <td class="num">€ {{formatCurrency this.line_total}}</td>
+              {{/if}}
             {{/if}}
           </tr>
           {{/each}}
@@ -165,25 +170,32 @@
       <!-- Totals -->
       <div class="totals">
         <table class="totals-table">
-          <tr>
-            <td style="color:#666">Imponibile</td>
-            <td>€ {{formatCurrency this.subtotal}}</td>
-          </tr>
-          {{#if this.discount}}
-          <tr class="discount-row">
-            <td>Sconto</td>
-            <td>− € {{formatCurrency this.discount}}</td>
-          </tr>
+          {{#if (eq this.pricing_mode 'single')}}
+            <tr class="total-row">
+              <td>TOTALE</td>
+              <td>€ {{formatCurrency this.total}}</td>
+            </tr>
+          {{else}}
+            <tr>
+              <td style="color:#666">Imponibile</td>
+              <td>€ {{formatCurrency this.subtotal}}</td>
+            </tr>
+            {{#if this.discount}}
+            <tr class="discount-row">
+              <td>Sconto</td>
+              <td>− € {{formatCurrency this.discount}}</td>
+            </tr>
+            {{/if}}
+            <tr>
+              <td style="color:#666">IVA {{this.tax_rate}}%</td>
+              <td>€ {{formatCurrency this.tax_amount}}</td>
+            </tr>
+            <tr class="separator"></tr>
+            <tr class="total-row">
+              <td>TOTALE</td>
+              <td>€ {{formatCurrency this.total}}</td>
+            </tr>
           {{/if}}
-          <tr>
-            <td style="color:#666">IVA {{this.tax_rate}}%</td>
-            <td>€ {{formatCurrency this.tax_amount}}</td>
-          </tr>
-          <tr class="separator"></tr>
-          <tr class="total-row">
-            <td>TOTALE</td>
-            <td>€ {{formatCurrency this.total}}</td>
-          </tr>
         </table>
       </div>
 

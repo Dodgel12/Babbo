@@ -19,6 +19,14 @@ function normalizeItem(raw, pricingMode = 'unit') {
     line_total: Math.max(toNumber(raw?.line_total, 0), 0)
   };
 
+  if (pricingMode === 'single') {
+    item.quantity = 1;
+    item.unit_price = 0;
+    item.discount = 0;
+    item.line_total = 0;
+    return item;
+  }
+
   if (pricingMode === 'total') {
     // Total-only mode: line_total is user-entered. Keep other numeric fields harmless.
     item.quantity = item.quantity || 1;
@@ -34,6 +42,20 @@ function normalizeItem(raw, pricingMode = 'unit') {
 }
 
 function calcTabTotals(tab) {
+  const mode = (tab.pricing_mode || 'unit').toString();
+
+  if (mode === 'single') {
+    const total = Math.max(toNumber(tab.single_total ?? tab.total ?? tab.subtotal ?? 0, 0), 0);
+    return {
+      ...tab,
+      discount: 0,
+      tax_rate: 0,
+      subtotal: total,
+      tax_amount: 0,
+      total
+    };
+  }
+
   const subtotal = (tab.items || []).reduce((s, it) => s + toNumber(it.line_total, 0), 0);
   const discount = Math.max(toNumber(tab.discount, 0), 0);
   const tax_rate = Math.max(toNumber(tab.tax_rate, 22), 0);
@@ -62,6 +84,7 @@ function normalizeTabs(body) {
         name: (t?.name || `Preventivo ${idx + 1}`).toString(),
         pricing_mode,
         items,
+        single_total: pricing_mode === 'single' ? (t?.single_total ?? t?.total ?? t?.subtotal ?? 0) : undefined,
         tax_rate: t?.tax_rate ?? body?.tax_rate,
         discount: t?.discount ?? body?.discount,
         validity_days: (t?.validity_days === '' || t?.validity_days === undefined) ? null : (t?.validity_days ?? body?.validity_days ?? null),
@@ -79,6 +102,7 @@ function normalizeTabs(body) {
     name: 'Preventivo',
     pricing_mode,
     items,
+    single_total: pricing_mode === 'single' ? (body?.single_total ?? body?.total ?? body?.subtotal ?? 0) : undefined,
     tax_rate: body?.tax_rate,
     discount: body?.discount,
     validity_days: (body?.validity_days === '' || body?.validity_days === undefined) ? null : (body?.validity_days ?? null),
